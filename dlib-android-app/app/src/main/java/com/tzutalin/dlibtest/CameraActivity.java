@@ -68,4 +68,12 @@ public class CameraActivity extends Activity {
             }
         }
     }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        Intent toHome = new Intent();
+        setResult(Activity.RESULT_CANCELED, toHome);
+        finish();
+    }
 }

@@ -40,6 +40,7 @@ repositories {
 
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
+    //noinspection GradleCompatible
     implementation "com.android.support:appcompat-v7:${rootProject.ext.androidSupportSdkVersion}"
     implementation "com.android.support:design:${rootProject.ext.androidSupportSdkVersion}"
     implementation 'com.github.dexafree:materiallist:3.0.1'
@@ -53,5 +54,6 @@ dependencies {
     androidTestImplementation 'com.android.support.test:rules:0.5'
     // Optional -- Hamcrest library
     androidTestCompile 'org.hamcrest:hamcrest-library:1.3'
+    implementation 'com.android.support:cardview-v7:28.0.0'
 }
 apply plugin: 'com.jakewharton.hugo'

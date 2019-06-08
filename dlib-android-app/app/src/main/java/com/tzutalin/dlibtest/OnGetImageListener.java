@@ -32,6 +32,7 @@ import android.media.Image.Plane;
 import android.media.ImageReader;
 import android.media.ImageReader.OnImageAvailableListener;
 import android.os.Build;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Trace;
 import android.os.Vibrator;
@@ -47,7 +48,13 @@ import com.tzutalin.dlib.VisionDetRet;
 
 import junit.framework.Assert;
 
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -62,6 +69,9 @@ public class OnGetImageListener implements OnImageAvailableListener {
 
     private static final int INPUT_SIZE = 224;
     private static final String TAG = "OnGetImageListener";
+
+    //파일 쓰기
+    final static String fileForLearn = "learn.txt";
 
     private int mScreenRotation = 90;
 
@@ -81,11 +91,25 @@ public class OnGetImageListener implements OnImageAvailableListener {
     private FloatingCameraWindow mWindow;
     private Paint mFaceLandmarkPaint, mFaceLandmarkPaint_edge;
 
+
     //새로 넣은 부분
     private int mode;   //모드 1~4까지 받는다
-    private float totalTime = 0.0f; //총 측정시간. 초기값은 0.0초이다.
     private Vibrator mVibrator;
-    private long[] pattern = {1000, 500}; // vibrate for 1 sec, 0.5 sec for pause
+
+    int measureCount = 0;   //측정되는 횟구를 세어본다.
+
+    //측정되기 이전의 면적값, 선값 등을 선언하고, 바뀔 때마다 이를 반영한다.
+    double previousArea = 0.0;
+    double previousRow = 0.0;
+    double previousCol = 0.0;
+    double previousRatio = 0.0;
+
+    double areaChangeSum = 0.0;
+    double rowChangeSum = 0.0;
+    double colChangeSum = 0.0;
+    double ratioChangeSum = 0.0;
+
+    int X, Y;
 
     public void initialize(final Context context, final AssetManager assetManager, final TrasparentTitleView scoreView, final Handler handler, final int mode) {
 
@@ -255,26 +279,21 @@ public class OnGetImageListener implements OnImageAvailableListener {
                         }
 
 
-                        //여기서부터는 시간 측정을 한다.
-                        long startTime = System.currentTimeMillis();    //측정 시작 시간(mills)
-
                         List<VisionDetRet> results; //result = 얼굴 검출 데이터
                         synchronized (OnGetImageListener.this) {
                             results = mFaceDet.detect(mCroppedBitmap);
                         }
 
-                        long endTime = System.currentTimeMillis();  //측정 끝 시간(mills)
-
-                        //총 측정된 시간을 float 형으로 저장
-                        float timeCost = (endTime - startTime) / 1000f;
-                        totalTime += timeCost;
-
-
-
-                        // Draw on bitmap if data set 'results' is detected
+                        //이미지가 감지되면...
                         if (results != null) {
+
+                            // 얼굴값이 검출되면 해야 할 일을 정의한다!
                             for (final VisionDetRet ret : results) {
-                                //입술 끝지점(노란색)의 좌표를 저장한다.
+                                if (measureCount == 0){
+                                    mVibrator.vibrate(150);
+                                }
+
+                                //입술 끝지점(노란색)의 좌표를 저장한다. (60, 62, 64, 66 총 4개)
                                 int[][] lipEdges = new int[4][2];
 
                                 float resizeRatio = 1.0f;
@@ -298,17 +317,17 @@ public class OnGetImageListener implements OnImageAvailableListener {
                                     //First, get the position of landmarks (우선 점의 좌표 순서값을 부른다)
                                     int position = landmarks.indexOf(point);
                                     /*
-                                    * The validate position of landmarks for lip detection is 48(49th) ~ 67(68th)
-                                    * */
+                                     * The validate position of landmarks for lip detection is 48(49th) ~ 67(68th)
+                                     * */
                                     if(position >= 48 && position <= 67){
                                         int pointX = (int) (point.x * resizeRatio);
                                         int pointY = (int) (point.y * resizeRatio);
 
 
-                                        if(position == 48 || position == 51 || position == 54 || position == 57){
+                                        if(position == 60 || position == 62 || position == 64 || position == 66){
                                             canvas.drawCircle(pointX, pointY, 2, mFaceLandmarkPaint_edge);
-                                            lipEdges[(position-48)/3][0] = pointX;
-                                            lipEdges[(position-48)/3][1] = pointY;
+                                            lipEdges[(position-60)/2][0] = pointX;
+                                            lipEdges[(position-60)/2][1] = pointY;
                                         }
                                         else{
                                             canvas.drawCircle(pointX, pointY, 2, mFaceLandmarkPaint);
@@ -319,10 +338,30 @@ public class OnGetImageListener implements OnImageAvailableListener {
 
                                 //입술 끝지점을 연결한 다각형(마름모꼴)의 면적을 구한다.
                                 double areaOfEdges = getArea(lipEdges);
+                                double edgeRow = getLength(lipEdges[0][0], lipEdges[0][1], lipEdges[2][0], lipEdges[2][1]);
+                                double edgeCol = getLength(lipEdges[1][0], lipEdges[1][1], lipEdges[3][0], lipEdges[3][1]);
+                                double ratio = (edgeCol / edgeRow) * 100;
 
-                                //마지막으로 mTransparentTitleView에다가 time cost와 다각형(마름모꼴) 면적 정보를 저장한다.
+                                double areaChange = areaOfEdges - previousArea;
+                                double rowChange = edgeRow - previousRow;
+                                double colChange = edgeCol - previousCol;
+                                double ratioChange = ratio - previousRatio;
+
+                                //mTransparentTitleView에다가 time cost와 다각형(마름모꼴) 면적 정보를 출력한다.
                                 //이는 점이 찍힐 때에만 나오며, 입술이 인식 안 될 때에는 .setText가 되지 않는다.
-                                mTransparentTitleView.setText("Time: " + totalTime + " sec / Area: " + areaOfEdges);
+                                mTransparentTitleView.setText(measureCount + "th change: " + Double.parseDouble(String.format("%.3f", areaChange)) + ", " + Double.parseDouble(String.format("%.3f", rowChange)) + "/" + Double.parseDouble(String.format("%.3f", colChange)) + " ratio: " + Double.parseDouble(String.format("%.3f", ratio)));
+                                measureCount += 1;
+
+                                areaChangeSum += (areaChange >= 0 ? areaChange : -areaChange);
+                                rowChangeSum += (rowChange >= 0 ? rowChange : -rowChange);
+                                colChangeSum += (colChange >= 0 ? colChange : -colChange);
+                                ratioChangeSum += (ratioChange >=0 ? ratioChange: -ratioChange);
+
+                                //마지막으로 최근에 측정된 면적, 선길이 등을 업데이트한다.
+                                previousArea = areaOfEdges;
+                                previousRow = edgeRow;
+                                previousCol = edgeCol;
+                                previousRatio = ratio;
 
                             }//end of for(results)
                         }//end of 'if(results != null)'
@@ -330,8 +369,26 @@ public class OnGetImageListener implements OnImageAvailableListener {
                         mWindow.setRGBBitmap(mCroppedBitmap);
                         mIsComputing = false;
 
-                        if(totalTime >= 5.0f){
-                            totalTime = 0.0f;
+                        if(measureCount >= 51){
+                            mVibrator.vibrate(500);
+                            Toast.makeText(mContext, "result: " + areaChangeSum + " / " + ratioChangeSum, Toast.LENGTH_SHORT).show();
+
+                            //X, Y 정의
+                            X = (int) areaChangeSum;
+                            Y = (int) (ratioChangeSum/10.0);
+
+                            //xdata.txt에 기존 데이터를 지우고 새로운 데이터를 넣기
+                            boolean isXstored = writeXY(X, "xdata.txt");
+                            //ydata.txt에 기존 데이터를 지우고 새로운 데이터를 넣기
+                            boolean isYstored = writeXY(Y, "ydata.txt");
+                            
+                            if(isXstored && isYstored){
+                                Toast.makeText(mContext, X + "와 " + Y + "가 성공적으로 저장되었습니다!", Toast.LENGTH_SHORT).show();
+                            }else{
+                                Toast.makeText(mContext, "저장 실패...", Toast.LENGTH_SHORT).show();
+                            }
+                            
+                            resetParameters();
                         }
 
                     }   //end of 'run()'
@@ -358,6 +415,70 @@ public class OnGetImageListener implements OnImageAvailableListener {
             result *= -1;
         }
 
-        return result / 2.0;
+        return result / 200.0;
     }
+
+    public double getLength(int firstX, int firstY, int secondX, int secondY){
+        return Math.sqrt(Math.pow(secondX - firstX, 2) + Math.pow(secondY - firstY, 2));
+    }
+
+    public void resetParameters(){
+        measureCount = 0;
+        previousArea = 0.0;
+        previousRow = 0.0;
+        previousCol = 0.0;
+        previousRatio = 0.0;
+
+        areaChangeSum = 0.0;
+        rowChangeSum = 0.0;
+        colChangeSum = 0.0;
+        ratioChangeSum = 0.0;
+    }
+
+    public boolean writeXY(int XY, String fileName){
+        boolean result = false;
+
+        //파일 경로 선언하기
+        String dirPath = Environment.getExternalStorageDirectory().getAbsolutePath() + "/ReadYourLip";
+        File file = new File(dirPath);
+        //해당 경로가 없으면 경로를 만든다.
+        if( !file.exists() ) {
+            file.mkdir();
+        }
+
+        String input = String.valueOf(XY);
+        try{
+            BufferedWriter buf = new BufferedWriter(new FileWriter(dirPath + "/" + fileName, false));
+            buf.write(input);
+            buf.close();
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+
+        int storedInt;
+        String stored = null;
+
+        try{
+            BufferedReader bufRead = new BufferedReader(new FileReader(dirPath + "/" + fileName));
+            stored = bufRead.readLine();
+            bufRead.close();
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        storedInt = Integer.parseInt(stored);
+
+        if(storedInt == XY) {
+            result = true;
+        }
+
+        return result;
+    }
+
+
 }
